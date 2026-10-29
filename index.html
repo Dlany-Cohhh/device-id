@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>今日校园 设备ID（通用版）</title>
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;padding:22px 16px 40px;font:15px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:#f4f5f7;color:#111827}
+  h1{font-size:18px;margin:0 0 6px}
+  .sub{color:#6b7280;font-size:13px;margin-bottom:18px}
+  .card{background:#fff;border-radius:14px;padding:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.07)}
+  .k{color:#6b7280;font-size:12px;margin-bottom:6px;letter-spacing:.02em}
+  .v{font:600 15px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;word-break:break-all;user-select:all;min-height:22px}
+  .v.empty{color:#9ca3af;font-weight:400}
+  button{width:100%;padding:13px;border:0;border-radius:11px;background:#2563eb;color:#fff;font-size:15px;font-weight:600}
+  button:disabled{background:#cbd2dd}
+  #status{font-size:13px;color:#6b7280;margin-top:12px;min-height:20px}
+  #status.err{color:#b91c1c}
+  #status.ok{color:#047857}
+  details{margin-top:14px}
+  summary{font-size:13px;color:#6b7280}
+  pre{white-space:pre-wrap;word-break:break-all;font-size:11.5px;color:#374151;background:#f9fafb;border-radius:10px;padding:10px;margin:8px 0 0;max-height:280px;overflow:auto}
+</style>
+</head>
+<body>
+  <h1>今日校园 · 设备ID</h1>
+  <div class="sub">必须用今日校园 App 的「扫一扫」打开本页；纯静态页面，不联网、不上报，只显示你自己手机的 ID。</div>
+
+  <div class="card">
+    <div class="k">deviceId（填到 accounts/&lt;账号&gt;.device_id）</div>
+    <div class="v empty" id="deviceId">等待 App 桥接…</div>
+  </div>
+
+  <div class="card">
+    <div class="k">uuid（备用标识）</div>
+    <div class="v empty" id="uuid">—</div>
+  </div>
+
+  <button id="copy" disabled>复制 deviceId</button>
+  <div id="status">正在检测运行环境…</div>
+
+  <details>
+    <summary>诊断信息</summary>
+    <pre id="diag"></pre>
+  </details>
+
+<script>
+(function () {
+  var UA = navigator.userAgent;
+  var isIOS = /iPhone|iPad|iPod/i.test(UA);
+  var $id = document.getElementById('deviceId');
+  var $uuid = document.getElementById('uuid');
+  var $btn = document.getElementById('copy');
+  var $status = document.getElementById('status');
+  var $diag = document.getElementById('diag');
+  var current = '';
+  var got = false;
+
+  function log(s) { $diag.textContent += s + '\n'; }
+  function setStatus(s, cls) { $status.textContent = s; $status.className = cls || ''; }
+
+  log('UA: ' + UA);
+  log('platform guess: ' + (isIOS ? 'iOS' : 'Android/other'));
+  log('cordova at load: ' + typeof window.cordova);
+
+  function render(info) {
+    if (got) return;
+    var did = '';
+    if (typeof info === 'string') did = info;
+    else if (info && typeof info === 'object') did = info.deviceId || info.uuid || info.id || '';
+    if (info && typeof info === 'object' && info.uuid) $uuid.textContent = String(info.uuid);
+    if (!did) { log('render: empty deviceId, info=' + JSON.stringify(info)); return; }
+    got = true;
+    current = String(did);
+    $id.textContent = current;
+    $id.className = 'v';
+    $btn.disabled = false;
+    setStatus('已获取，点上面按钮复制', 'ok');
+    log('deviceInfo: ' + JSON.stringify(info));
+  }
+
+  function fallback(reason) {
+    if (got) return;
+    log('fallback: ' + reason);
+    try {
+      if (window.BH_MOBILE && window.BH_MOBILE.device && window.BH_MOBILE.device.getDeviceId) {
+        render({ deviceId: window.BH_MOBILE.device.getDeviceId() });
+        return;
+      }
+    } catch (e) { log('BH_MOBILE err: ' + e); }
+    try {
+      if (window.device && window.device.uuid) { render({ uuid: window.device.uuid }); return; }
+    } catch (e) { log('window.device err: ' + e); }
+    if (!/cpdaily|wisedu|campushoy/i.test(UA)) {
+      setStatus('未检测到今日校园 App 环境：请退出微信/浏览器，改用 App 内「扫一扫」打开', 'err');
+    } else {
+      setStatus('App 环境已识别，但桥接未返回数据，请下拉刷新重试', 'err');
+    }
+  }
+
+  function callBridge() {
+    if (got) return;
+    if (typeof window.cordova === 'undefined' || !window.cordova.exec) {
+      log('cordova not ready, retry later');
+      return;
+    }
+    try {
+      window.cordova.exec(
+        function (info) { render(info); },
+        function (err) { fallback('exec error: ' + JSON.stringify(err)); },
+        'MAMPDevice', 'getDeviceInfo', []
+      );
+      log('cordova.exec(MAMPDevice.getDeviceInfo) sent');
+    } catch (e) {
+      fallback('exec throw: ' + e);
+    }
+  }
+
+  var src = isIOS
+    ? 'https://static.campushoy.com/innerjs/cordova_ios.js'
+    : 'https://static.campushoy.com/innerjs/cordova_android.js';
+  var s = document.createElement('script');
+  s.src = src;
+  s.onload = function () { log('bridge script loaded: ' + src); callBridge(); };
+  s.onerror = function () { log('bridge script FAILED: ' + src); };
+  document.head.appendChild(s);
+
+  document.addEventListener('deviceready', function () {
+    log('event: deviceready');
+    callBridge();
+  }, false);
+
+  var tries = 0;
+  var timer = setInterval(function () {
+    tries += 1;
+    if (got || tries > 12) { clearInterval(timer); if (!got) fallback('timeout'); return; }
+    callBridge();
+  }, 800);
+
+  $btn.addEventListener('click', function () {
+    if (!current) return;
+    var done = function () { setStatus('已复制：' + current, 'ok'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(current).then(done, function () { legacyCopy(); });
+    } else { legacyCopy(); }
+    function legacyCopy() {
+      var t = document.createElement('textarea');
+      t.value = current; t.style.position = 'fixed'; t.style.opacity = '0';
+      document.body.appendChild(t); t.select();
+      try { document.execCommand('copy'); done(); } catch (e) { setStatus('复制失败，请长按上面的值手动复制', 'err'); }
+      document.body.removeChild(t);
+    }
+  });
+})();
+</script>
+</body>
+</html>
