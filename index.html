@@ -178,6 +178,7 @@
     if (i >= ACTIONS.length) { fallbacks(); return; }
     var action = ACTIONS[i];
     var key = action;
+    setStatus('正在探测 ' + (svc || 'MAMPDevice') + '.' + action + ' …');
     exec(svc || 'MAMPDevice', action, action === 'getDeviceId' ? [''] : [], 2200, function (v, tag) {
       got[key] = v;
       var n = norm(v);
