@@ -51,17 +51,29 @@
   <div class="card">
     <div class="k">App 各接口返回值</div>
     <table id="tbl"><tbody></tbody></table>
-    <div class="hint">实测结论：<b>getDeviceInfo 返回的 uuid 不是签到用的 deviceId</b>（iOS/安卓各测一台，提交均被 <b>2210060000</b> 拒绝）。桥里只有它，说明这条 H5 通道拿不到真值。</div>
+    <div class="hint"><b>安卓</b>：<code>getDeviceInfo.uuid</code> 就是 App 持久化的 deviceId（已用外部导出文件核对，一加 PHB110 实测值一致）→ 可直接用。
+      <br><b>iOS</b>：同一个字段返回的是 <b>IDFV</b>，不是签到用的 deviceId → 必须另找，见下面说明。</div>
   </div>
 
   <div class="card warn">
-    <div class="k">安卓：3 步读出真值（不依赖本页）</div>
+    <div class="k">安卓：核对 / 兜底（不依赖本页）</div>
     <ol class="steps">
-      <li>「我的」→ 设置 → <b>关于</b> → 3 秒内连点「版本号」<b>7 次</b>，弹出「调试标记已启用」。</li>
-      <li>返回「我的」，列表末尾会多出 <b>Debug数据</b>，点进去。</li>
-      <li>找 <code>…/files/device/device_id.json :</code> 这一行，冒号后就是真值；同页还有「当前uuid」「SP UUID」可一起截图。</li>
+      <li>文件管理器 → <code>内部存储/Pictures/wismcp/did/cpdaily_external_did.jpg</code>，用「文本」方式打开，内容就是 deviceId。</li>
+      <li>或用数据线连电脑跑 <code>python scripts/get_deviceid_android.py</code>（免 root）。</li>
+      <li>还可以开 Debug 页：「我的」→ 设置 → <b>关于</b> → 3 秒内连点「版本号」<b>7 次</b> → 返回「我的」→ <b>Debug数据</b> → 看 <code>device_id.json :</code> 那一行。</li>
     </ol>
-    <div class="hint">调试标记是内存态，点完<b>别杀 App 进程</b>，否则要重新点。这页直接把 App 自己持久化的设备号解码后明文显示。</div>
+    <div class="hint">Debug 标记是内存态，点完<b>别杀 App 进程</b>。三种方式取到的应是同一个值。</div>
+  </div>
+
+  <div class="card warn">
+    <div class="k">iOS：这个值本页拿不到，要从沙盒/备份取</div>
+    <ol class="steps">
+      <li>数据线连电脑，用 <b>爱思助手</b> 或 <b>iMazing</b> 打开「今日校园」的沙盒文件。</li>
+      <li>找 <code>Library/Preferences/com.wisedu.cpdaily.plist</code> 里的 <code>app_unique_uuid</code>，
+          或 <code>Documents/device/device_id.json</code>。</li>
+      <li>取不到就退回抓包：<code>python scripts/extract_deviceid.py --ext "&lt;Cpdaily-Extension 头&gt;"</code>。</li>
+    </ol>
+    <div class="hint">iOS 的 IDFV 与这个值无关，别用 <code>getDeviceInfo.uuid</code> 顶替。</div>
   </div>
 
   <button id="copy" disabled>复制设备ID</button>
@@ -258,17 +270,35 @@
       return;
     }
 
-    // 走到这里：桥里没有真值。把 getDeviceInfo.uuid 显示出来但明确标记为无效。
+    // 走到这里：桥里没有「设备号」类动作。分平台判断 uuid 能不能用。
     var uuid = isObj ? String(info.uuid || '') : '';
+    var plat = isObj ? String(info.platform || '').toLowerCase() : '';
+    var onAndroid = plat === 'android' || (!isIOS && !plat);
+
+    // 安卓：实测 getDeviceInfo.uuid 与 App 导出的真值完全一致
+    // （/sdcard/Pictures/wismcp/did/cpdaily_external_did.jpg，一加 PHB110 实测同为同一个 UUID），
+    // 所以安卓上这个值可以直接用。
+    if (uuid && onAndroid) {
+      usable = true;
+      current = uuid;
+      $id.textContent = uuid;
+      $id.className = 'v good';
+      $src.innerHTML = '来源：getDeviceInfo.uuid —— 安卓上它就是 App 持久化的 deviceId' +
+        '（已用 <b>/sdcard/Pictures/wismcp/did/cpdaily_external_did.jpg</b> 核对，值一致）。';
+      $btn.disabled = false;
+      setStatus('已获取（安卓真值），点上面按钮复制', 'ok');
+      return;
+    }
+
     $card.className = 'card warn';
     $label.textContent = '未取到签到用设备ID';
     if (uuid) {
       current = uuid;
       $id.textContent = uuid;
       $id.className = 'v bad';
-      $src.innerHTML = '这是 <b>getDeviceInfo.uuid</b>，' +
-        (isIOS ? 'iOS 上是 IDFV' : '安卓上是 App 随机生成的 UUID') +
-        '，实测提交会被 2210060000 拒绝 —— <b>不要</b>填进 device_id。';
+      $src.innerHTML = '这是 <b>getDeviceInfo.uuid</b>，iOS 上它是 <b>IDFV</b>，' +
+        '和 App 真正持久化的 deviceId 是两个值 —— <b>不要</b>填进 device_id。' +
+        'iOS 请从备份/沙盒里取 <code>device_id.json</code> 或 plist 的 <code>app_unique_uuid</code>。';
       $btn.disabled = false;
     } else {
       $id.textContent = /cpdaily|wisedu|campushoy/i.test(UA)
