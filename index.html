@@ -42,7 +42,7 @@
   <div class="card">
     <div class="k">App 各接口返回值</div>
     <table id="tbl"><tbody></tbody></table>
-    <div class="hint">getDeviceInfo 返回的 uuid 在 iOS 上是 IDFV，<b>不是</b>提交用的 deviceId；以 getOnlyDeviceId 为准。</div>
+    <div class="hint">getDeviceInfo 返回的 uuid 在 iOS 上是 IDFV，实测提交会被 2210060000 拒绝，<b>不是</b>签到用的 deviceId；优先看 getOnlyDeviceId / BH_MOBILE。</div>
   </div>
 
   <button id="copy" disabled>复制设备ID</button>
@@ -126,9 +126,57 @@
     }
   }
 
+  // 兜底途径：BH_MOBILE 桥（老版本/个别环境）与 window.device.uuid。
+  // 参考 campus-device-id 的实现，iOS 上 MAMPDevice 只给 IDFV，这两条可能给到真值。
+  function fallbacks() {
+    var bh = (typeof window.BH_MOBILE !== 'undefined' && window.BH_MOBILE && window.BH_MOBILE.device) || null;
+    if (bh && typeof bh.getDeviceId === 'function') {
+      var done = false;
+      var t = setTimeout(function () {
+        if (done) return;
+        done = true;
+        log('BH_MOBILE.getDeviceId: timeout');
+        row('BH_MOBILE.getDeviceId', '超时', false);
+        afterBH();
+      }, 2000);
+      try {
+        bh.getDeviceId(function (v) {
+          if (done) return;
+          done = true;
+          clearTimeout(t);
+          log('BH_MOBILE.getDeviceId: ok ' + JSON.stringify(v));
+          got.bhMobile = v;
+          row('BH_MOBILE.getDeviceId', norm(v) || '（空）', false);
+          afterBH();
+        });
+      } catch (e) {
+        clearTimeout(t);
+        if (!done) {
+          done = true;
+          log('BH_MOBILE.getDeviceId: throw ' + e);
+          row('BH_MOBILE.getDeviceId', '异常', false);
+          afterBH();
+        }
+      }
+    } else {
+      log('BH_MOBILE: ' + (typeof window.BH_MOBILE === 'undefined' ? '不存在' : '无 device.getDeviceId'));
+      afterBH();
+    }
+
+    function afterBH() {
+      if (window.device && window.device.uuid) {
+        got.winDevice = { uuid: String(window.device.uuid) };
+        row('window.device.uuid', got.winDevice.uuid, false);
+      } else {
+        row('window.device.uuid', '不存在', false);
+      }
+      decide();
+    }
+  }
+
   function next() {
     if (settled) return;
-    if (tried >= ACTIONS.length) { decide(); return; }
+    if (tried >= ACTIONS.length) { fallbacks(); return; }
     var action = ACTIONS[tried++];
     callAction(action, function (v) {
       got[action] = v;
@@ -141,11 +189,15 @@
     if (settled) return;
     settled = true;
     var info = got.getDeviceInfo;
+    // 优先级：钉死设备号的方法在前，IDFV(uuid) 放最后——实测两台 iPhone 的 IDFV 提交均被
+    // 2210060000 拒绝，说明它不是真正用于签到的 deviceId。
     var cand = [
       ['getOnlyDeviceId', norm(got.getOnlyDeviceId)],
       ['getDeviceId', norm(got.getDeviceId)],
       ['getUuid', norm(got.getUuid)],
       ['getDeviceInfo.deviceId', info && typeof info === 'object' ? String(info.deviceId || '') : ''],
+      ['BH_MOBILE.getDeviceId', norm(got.bhMobile)],
+      ['window.device.uuid', got.winDevice ? got.winDevice.uuid : ''],
       ['getDeviceInfo.uuid', info && typeof info === 'object' ? String(info.uuid || '') : '']
     ];
     var picked = null;
@@ -164,7 +216,7 @@
     setStatus('已获取，点上面按钮复制', 'ok');
     var rows = $tbody.querySelectorAll('tr');
     for (var j = 0; j < rows.length; j++) {
-      if (rows[j].firstChild && rows[j].firstChild.textContent === picked[0].split('.')[0]) rows[j].className = 'best';
+      if (rows[j].firstChild && rows[j].firstChild.textContent === picked[0]) rows[j].className = 'best';
     }
   }
 
