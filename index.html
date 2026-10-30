@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>今日校园 设备ID（通用版）</title>
+<title>今日校园 设备ID</title>
 <style>
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   body{margin:0;padding:22px 16px 40px;font:15px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:#f4f5f7;color:#111827}
@@ -13,6 +13,7 @@
   .k{color:#6b7280;font-size:12px;margin-bottom:6px;letter-spacing:.02em}
   .v{font:600 15px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;word-break:break-all;user-select:all;min-height:22px}
   .v.empty{color:#9ca3af;font-weight:400}
+  .hint{color:#6b7280;font-size:12px;margin-top:8px}
   button{width:100%;padding:13px;border:0;border-radius:11px;background:#2563eb;color:#fff;font-size:15px;font-weight:600}
   button:disabled{background:#cbd2dd}
   #status{font-size:13px;color:#6b7280;margin-top:12px;min-height:20px}
@@ -20,24 +21,31 @@
   #status.ok{color:#047857}
   details{margin-top:14px}
   summary{font-size:13px;color:#6b7280}
-  pre{white-space:pre-wrap;word-break:break-all;font-size:11.5px;color:#374151;background:#f9fafb;border-radius:10px;padding:10px;margin:8px 0 0;max-height:280px;overflow:auto}
+  pre{white-space:pre-wrap;word-break:break-all;font-size:11.5px;color:#374151;background:#f9fafb;border-radius:10px;padding:10px;margin:8px 0 0;max-height:320px;overflow:auto}
+  table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+  td{padding:5px 4px;border-bottom:1px solid #f1f2f4;vertical-align:top}
+  td.a{color:#6b7280;white-space:nowrap;width:44%}
+  td.b{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;word-break:break-all;user-select:all}
+  .best td{background:#ecfdf5}
 </style>
 </head>
 <body>
   <h1>今日校园 · 设备ID</h1>
-  <div class="sub">必须用今日校园 App 的「扫一扫」打开本页；纯静态页面，不联网、不上报，只显示你自己手机的 ID。</div>
+  <div class="sub">用今日校园 App 的「扫一扫」打开。纯静态页面，不联网、不上报，只在本机显示。</div>
 
   <div class="card">
-    <div class="k">deviceId（填到 accounts/&lt;账号&gt;.device_id）</div>
+    <div class="k">设备ID（填到 accounts/&lt;账号&gt;.device_id）</div>
     <div class="v empty" id="deviceId">等待 App 桥接…</div>
+    <div class="hint" id="source"></div>
   </div>
 
   <div class="card">
-    <div class="k">uuid（备用标识）</div>
-    <div class="v empty" id="uuid">—</div>
+    <div class="k">App 各接口返回值</div>
+    <table id="tbl"><tbody></tbody></table>
+    <div class="hint">getDeviceInfo 返回的 uuid 在 iOS 上是 IDFV，<b>不是</b>提交用的 deviceId；以 getOnlyDeviceId 为准。</div>
   </div>
 
-  <button id="copy" disabled>复制 deviceId</button>
+  <button id="copy" disabled>复制设备ID</button>
   <div id="status">正在检测运行环境…</div>
 
   <details>
@@ -50,12 +58,13 @@
   var UA = navigator.userAgent;
   var isIOS = /iPhone|iPad|iPod/i.test(UA);
   var $id = document.getElementById('deviceId');
-  var $uuid = document.getElementById('uuid');
+  var $src = document.getElementById('source');
   var $btn = document.getElementById('copy');
   var $status = document.getElementById('status');
   var $diag = document.getElementById('diag');
+  var $tbody = document.querySelector('#tbl tbody');
   var current = '';
-  var got = false;
+  var settled = false;
 
   function log(s) { $diag.textContent += s + '\n'; }
   function setStatus(s, cls) { $status.textContent = s; $status.className = cls || ''; }
@@ -64,57 +73,110 @@
   log('platform guess: ' + (isIOS ? 'iOS' : 'Android/other'));
   log('cordova at load: ' + typeof window.cordova);
 
-  function render(info) {
-    if (got) return;
-    var did = '';
-    if (typeof info === 'string') did = info;
-    else if (info && typeof info === 'object') did = info.deviceId || info.uuid || info.id || '';
-    if (info && typeof info === 'object' && info.uuid) $uuid.textContent = String(info.uuid);
-    if (!did) { log('render: empty deviceId, info=' + JSON.stringify(info)); return; }
-    got = true;
-    current = String(did);
-    $id.textContent = current;
-    $id.className = 'v';
-    $btn.disabled = false;
-    setStatus('已获取，点上面按钮复制', 'ok');
-    log('deviceInfo: ' + JSON.stringify(info));
+  // 依次尝试的桥接动作。getOnlyDeviceId 排首位：这是今日校园自己持久化的唯一设备号
+  // （DeviceImpl.getOnlyDeviceId），getDeviceInfo 返回的 uuid 在 iOS 上是 IDFV，不等于它。
+  var ACTIONS = ['getOnlyDeviceId', 'getDeviceId', 'getUuid', 'getDeviceInfo'];
+  var got = {};
+  var tried = 0;
+
+  function norm(v) {
+    if (v == null) return '';
+    if (typeof v === 'string') return v.trim();
+    if (typeof v === 'object') {
+      return String(v.deviceId || v.did || v.onlyDeviceId || v.uuid || v.result || v.data || '');
+    }
+    return String(v);
   }
 
-  function fallback(reason) {
-    if (got) return;
-    log('fallback: ' + reason);
+  function row(action, value, isBest) {
+    var tr = document.createElement('tr');
+    if (isBest) tr.className = 'best';
+    var td1 = document.createElement('td'); td1.className = 'a'; td1.textContent = action;
+    var td2 = document.createElement('td'); td2.className = 'b';
+    td2.textContent = value === '' ? '（空）' : value;
+    tr.appendChild(td1); tr.appendChild(td2);
+    $tbody.appendChild(tr);
+    return tr;
+  }
+
+  function callAction(action, cb) {
+    var done = false;
+    var timer = setTimeout(function () {
+      if (done) return;
+      done = true;
+      log(action + ': timeout');
+      cb(null);
+    }, 2500);
+    var finish = function (v, tag) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      log(action + ': ' + tag + ' ' + (v && typeof v === 'object' ? JSON.stringify(v) : v));
+      cb(v);
+    };
     try {
-      if (window.BH_MOBILE && window.BH_MOBILE.device && window.BH_MOBILE.device.getDeviceId) {
-        render({ deviceId: window.BH_MOBILE.device.getDeviceId() });
-        return;
-      }
-    } catch (e) { log('BH_MOBILE err: ' + e); }
-    try {
-      if (window.device && window.device.uuid) { render({ uuid: window.device.uuid }); return; }
-    } catch (e) { log('window.device err: ' + e); }
-    if (!/cpdaily|wisedu|campushoy/i.test(UA)) {
-      setStatus('未检测到今日校园 App 环境：请退出微信/浏览器，改用 App 内「扫一扫」打开', 'err');
-    } else {
-      setStatus('App 环境已识别，但桥接未返回数据，请下拉刷新重试', 'err');
+      window.cordova.exec(
+        function (v) { finish(v, 'ok'); },
+        function (e) { finish(null, 'err ' + JSON.stringify(e)); },
+        'MAMPDevice', action, []
+      );
+      log('cordova.exec(MAMPDevice.' + action + ') sent');
+    } catch (e) {
+      finish(null, 'throw ' + e);
     }
   }
 
-  function callBridge() {
-    if (got) return;
+  function next() {
+    if (settled) return;
+    if (tried >= ACTIONS.length) { decide(); return; }
+    var action = ACTIONS[tried++];
+    callAction(action, function (v) {
+      got[action] = v;
+      row(action, norm(v) || (v ? JSON.stringify(v) : '失败/无此动作'), false);
+      next();
+    });
+  }
+
+  function decide() {
+    if (settled) return;
+    settled = true;
+    var info = got.getDeviceInfo;
+    var cand = [
+      ['getOnlyDeviceId', norm(got.getOnlyDeviceId)],
+      ['getDeviceId', norm(got.getDeviceId)],
+      ['getUuid', norm(got.getUuid)],
+      ['getDeviceInfo.deviceId', info && typeof info === 'object' ? String(info.deviceId || '') : ''],
+      ['getDeviceInfo.uuid', info && typeof info === 'object' ? String(info.uuid || '') : '']
+    ];
+    var picked = null;
+    for (var i = 0; i < cand.length; i++) { if (cand[i][1]) { picked = cand[i]; break; } }
+    if (!picked) {
+      setStatus(/cpdaily|wisedu|campushoy/i.test(UA)
+        ? 'App 环境已识别，但所有桥接动作都没返回数据，请下拉刷新重试'
+        : '未检测到今日校园 App 环境：请退出微信/浏览器，改用 App 内「扫一扫」打开', 'err');
+      return;
+    }
+    current = picked[1];
+    $id.textContent = current;
+    $id.className = 'v';
+    $src.textContent = '来源：' + picked[0] + ' · 小写：' + current.toLowerCase();
+    $btn.disabled = false;
+    setStatus('已获取，点上面按钮复制', 'ok');
+    var rows = $tbody.querySelectorAll('tr');
+    for (var j = 0; j < rows.length; j++) {
+      if (rows[j].firstChild && rows[j].firstChild.textContent === picked[0].split('.')[0]) rows[j].className = 'best';
+    }
+  }
+
+  var started = false;
+  function start() {
+    if (started) return;
     if (typeof window.cordova === 'undefined' || !window.cordova.exec) {
       log('cordova not ready, retry later');
       return;
     }
-    try {
-      window.cordova.exec(
-        function (info) { render(info); },
-        function (err) { fallback('exec error: ' + JSON.stringify(err)); },
-        'MAMPDevice', 'getDeviceInfo', []
-      );
-      log('cordova.exec(MAMPDevice.getDeviceInfo) sent');
-    } catch (e) {
-      fallback('exec throw: ' + e);
-    }
+    started = true;
+    next();
   }
 
   var src = isIOS
@@ -122,20 +184,20 @@
     : 'https://static.campushoy.com/innerjs/cordova_android.js';
   var s = document.createElement('script');
   s.src = src;
-  s.onload = function () { log('bridge script loaded: ' + src); callBridge(); };
+  s.onload = function () { log('bridge script loaded: ' + src); start(); };
   s.onerror = function () { log('bridge script FAILED: ' + src); };
   document.head.appendChild(s);
 
   document.addEventListener('deviceready', function () {
     log('event: deviceready');
-    callBridge();
+    start();
   }, false);
 
   var tries = 0;
   var timer = setInterval(function () {
     tries += 1;
-    if (got || tries > 12) { clearInterval(timer); if (!got) fallback('timeout'); return; }
-    callBridge();
+    if (settled || tries > 15) { clearInterval(timer); if (!settled) decide(); return; }
+    start();
   }, 800);
 
   $btn.addEventListener('click', function () {
